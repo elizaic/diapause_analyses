@@ -1,0 +1,852 @@
+---
+title: "Diapause Analyses"
+author: "Eliza Clark"
+date: '2024-02-27'
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Initials
+
+## Packages
+```{r, warning=FALSE, message=FALSE}
+library(readxl)
+library(tidyverse)
+library(tidyr)
+library(lubridate)
+library(survival)
+library(survminer)
+library(emmeans)
+library(ggfortify)
+library(viridis)
+library(glmmTMB)
+library(DHARMa)
+library(car)
+library(grid)
+library(ggeffects)
+library(broom)
+library(gridExtra)
+# library(ggplot2)
+# library(ggiraph)
+# library(ggiraphExtra)
+# library(moonBook)
+```
+
+## Data import and formatting
+```{r, warning=FALSE}
+# Data load and clean up ----
+#load diapause data, delete missing/messed up trials, create time column, make trt & pop factors
+diapauseData <- read_excel("diapause.xlsx")
+diapauseData2 <- diapauseData %>%
+  filter(diapause != "missing") %>%
+  filter(is.na(notes) == T) %>%
+  select(-notes)  %>% 
+  mutate(time = (end_date - start_date)) %>%
+  mutate(treatment = as_factor(treatment)) %>%
+  mutate(population = as_factor(population)) %>%
+  mutate(diapause = as.numeric(diapause)) %>%
+  mutate(core_edge = case_when(
+    population == "Bl" | population == "Lc" | population == "Lj" | population == "Wi" ~ "edge",
+    population == "De" | population == "Hu" | population == "Lo" | population == "Pu" ~ "core"
+  )) %>%
+  mutate(core_edge = as_factor(core_edge)) %>%
+  mutate(time = as.numeric(time, units = 'days'))
+
+  
+#load fecundity/weight data
+weightData <- read_xlsx("G:/My Drive/GRAD SCHOOL/RESEARCH/D. carinulata/range expansion dynamics experiments/eggcount.xlsx")
+
+#Combine data sets
+diapauseData3 <- left_join(diapauseData2, 
+          weightData %>% select(beetle_ID, eggs, weight), 
+                 by = "beetle_ID") %>%
+  mutate(latitude = case_when(
+    population == "Bl" ~ 33.912,
+    population == "Lc" ~ 34.593,
+    population == "Lj" ~ 34.342,
+    population == "Wi" ~ 34.422,
+    population == "De" ~ 39.144,
+    population == "Hu" ~ 40.063,
+    population == "Lo" ~ 44.856,
+    population == "Pu" ~ 38.268
+  )) %>%
+  mutate(elevation = case_when(
+    population == "Bl" ~ 96.9,
+    population == "Lc" ~ 1669.56,
+    population == "Lj" ~ 1433,
+    population == "Wi" ~ 1204.74,
+    population == "De" ~ 1386.43,
+    population == "Hu" ~ 1189.62,
+    population == "Lo" ~ 1115.35,
+    population == "Pu" ~ 1448.19
+  )) %>%
+  mutate(degree_days = case_when(
+    population == "Bl" ~ 4524,
+    population == "Lc" ~ 2043,
+    population == "Lj" ~ 2547,
+    population == "Wi" ~ 3516,
+    population == "De" ~ 1767,
+    population == "Hu" ~ 1841,
+    population == "Lo" ~ 1438,
+    population == "Pu" ~ 1990
+  )) %>%
+  mutate(distFromCore = 39.144 - latitude) %>%
+  mutate(distFromEdge = 34.422 - latitude)
+
+diapauseData3 <- diapauseData3 %>% mutate(time_diap = replace(time, diapause == 0, 43))
+diapauseData3$core_edge <- factor(diapauseData3$core_edge, levels = c('core', 'edge'))
+diapauseData3$degree_days_scaled <- scale(diapauseData3$degree_days, center = T, scale = T)
+diapauseData3$population <- factor(diapauseData3$population, levels = c('Lo', 'Hu', 'De', 'Pu', 'Lc', 'Wi', 'Lj', 'Bl'))
+str(diapauseData3)
+
+#Find range of ages when beetles started treatment
+ageAtStart <- left_join(diapauseData2 %>% select(beetle_ID, start_date),
+          weightData %>% select(beetle_ID, eclosion), 
+          by = "beetle_ID") 
+range(ageAtStart$start_date - ageAtStart$eclosion, na.rm = T)
+
+## weight of LJ population (checking for high weight beetles that might indicated non-carinulata)
+diapauseData3 %>% filter(population == 'Lj') %>% 
+  ggplot(aes(x = weight)) +
+  geom_histogram(bins = 50)
+```
+
+# Analyses
+
+## Days to diapause
+
+### Diapausers only
+```{r}
+## Diapausers only----
+## dataset
+diapauseDataDiapausing <- diapauseData3 %>%
+  filter(diapause == 1)
+
+## summarize data
+dtd_n2 <- diapauseDataDiapausing %>% group_by(treatment, population) %>% summarise(
+  mean = mean(time),
+  sd = sd(time),
+  n = n()
+)
+dtd_n2 <- dtd_n2 %>% mutate(n2 = replace(n, n==20, 'n=20') )
+
+diapauseDataDiapausing %>% group_by(treatment, core_edge) %>% summarise(
+  mean = mean(time),
+  sd = sd(time),
+  n = n()
+)
+dtd_n1 <- c("n = 90", '15', "79", '126')
+
+diapauseData3%>% group_by(treatment, core_edge) %>% summarise(
+  mean = mean(time),
+  sd = sd(time),
+  n = n()
+)
+```
+
+
+```{r}
+##model with core_Edge, pop as rand
+modDiapausing <- glmmTMB(time ~ core_edge * treatment + (1| population), data = diapauseDataDiapausing,
+                         family = poisson)
+simulateResiduals(modDiapausing) %>% plot()
+summary(modDiapausing)
+Anova(modDiapausing, type = 3)
+emmeans(modDiapausing, pairwise ~ core_edge|treatment, type = 'response')
+emmeans(modDiapausing, pairwise ~ treatment|core_edge, type = 'response')
+
+ranef(modDiapausing, condVar = F)
+coef(modDiapausing)
+ggpredict(modDiapausing, terms = c("population"), type = "random", condition = c(treatment = 'long'))
+
+emoutDiapausing <- emmeans(modDiapausing, pairwise ~ core_edge*treatment, type = "response")
+meansDiapausing_df <- as.data.frame(emoutDiapausing$emmeans)
+meansDiapausing_df$core_edge <- factor(meansDiapausing_df$core_edge, levels = c('core', 'edge'))
+meansDiapausing_df <- cbind(meansDiapausing_df,dtd_n1)
+
+diapauseDataDiapausing$core_edge <- factor(diapauseDataDiapausing$core_edge, levels = c('core', 'edge'))
+
+##model with populations - low sample sizes here!
+modDiapausingpop <- glmmTMB(time ~  treatment * population, data = diapauseDataDiapausing,
+                            family = poisson)
+simulateResiduals(modDiapausingpop) %>% plot()
+summary(modDiapausingpop)
+Anova(modDiapausingpop, type = 3)
+emmeans(modDiapausingpop, pairwise ~ treatment*population, type = 'response')
+
+emoutDiapausingPops <- emmeans(modDiapausingpop, pairwise ~ population*treatment, type = "response")
+meansDiapausingPops_df <- as.data.frame(emoutDiapausingPops$emmeans) %>%
+  mutate(core_edge = case_when(
+    population == "Bl" | population == "Lc" | population == "Lj" | population == "Wi" ~ "edge",
+    population == "De" | population == "Hu" | population == "Lo" | population == "Pu" ~ "core"
+  ))
+meansDiapausingPops_df$population <- factor(meansDiapausingPops_df$population, levels = c('Lo', 'Hu', 'De', 'Pu', 'Lc', 'Wi', 'Lj', 'Bl'))
+diapauseDataDiapausing$population <- factor(diapauseDataDiapausing$population, levels = c('Lo', 'Hu', 'De', 'Pu', 'Lc', 'Wi', 'Lj', 'Bl'))
+```
+
+```{r, fig.width=8}
+# Reaction Norm Plot - Core edge
+diapausers_coreedge_plot <- ggplot(data = meansDiapausing_df, aes(x = treatment, y = rate, fill = core_edge)) +
+  geom_point(data = diapauseDataDiapausing, aes(x = treatment, y = time, fill = core_edge),
+             position = position_jitterdodge(dodge.width = 0.35, jitter.width = 0.15),
+             alpha = 0.75, shape = 21) +
+  # geom_violin(data = diapauseDataDiapausing, aes(x = treatment, y = time, fill = core_edge), 
+  #             position = position_jitterdodge(dodge.width = 0.35, jitter.width = 0.05),
+  #             alpha = 0.25) +
+  geom_line(aes(group = core_edge), position = position_dodge(width = 0.35), size = 0.73) +
+  geom_pointrange(aes(x = treatment, y = rate, ymin = lower.CL, ymax = upper.CL), 
+                  position = position_dodge(width = 0.35), shape = 21, size = 0.8) +
+  geom_text(aes(label = dtd_n1, y = -1), position = position_dodge(width = 0.5)) +
+  labs(x = "Test Environment", y = "Days to Diapause (95% CI)", fill = "Collection \nLocation") +
+  scale_x_discrete(labels = c('long' = "North Fall", 'short' = "South Fall")) +
+  scale_fill_manual(values = c('core' = 'white', 'edge' = 'black'), labels = c('edge' = "South", 'core' = "North")) +
+  theme_bw(base_size = 15)
+
+#Plot for populations
+diapausers_pop_plot <- ggplot(data = meansDiapausingPops_df) +
+  geom_point(data = diapauseDataDiapausing, aes(x = population, y = time),
+             position = position_jitter(width = 0.15), alpha = 0.25) +
+  geom_pointrange(aes(x = population, y = rate, ymin = lower.CL, ymax = upper.CL, fill = core_edge), 
+                  color = 'black', shape = 21, size = 0.8) +
+  facet_grid( ~ treatment, labeller = labeller(treatment = c('long' = "North Fall Environment", 'short' = "South Fall Environment")),
+              switch = 'x') +
+  geom_text(data = dtd_n2, aes(label = n2, x = population, y = -1)) +
+  labs(x = "Collection Location (N to S)", y = "Days to Diapause (95% CI)", fill = "Collection \nLocation") +
+  scale_x_discrete(labels = c('Lo' = 'A', 'Hu' = 'B', 'De' = 'C', 'Pu' = 'D', 'Lc' = 'E', 'Wi' = 'F', 'Lj' = 'G', 'Bl' = 'H')) +
+  scale_fill_manual(values = c('core' = 'white', 'edge' = 'black'), labels = c('edge' = "South", 'core' = "North")) +
+  theme_bw(base_size = 15) +
+  theme(strip.background = element_rect(fill = 'white'))
+
+##Combining plots for publication
+ggarrange(diapausers_coreedge_plot, diapausers_pop_plot, 
+          common.legend = T, 
+          legend = 'right', 
+          widths = c(1.3,2),
+          labels = 'AUTO')
+##export: width = 1100, height = 575 (11.46in x 5.99in)
+
+## Combining population and core edge plots in reaction norm style
+ggplot(data = meansDiapausing_df, aes(x = treatment, y = rate, fill = core_edge)) +
+  #add data points
+  geom_point(data = diapauseDataDiapausing, aes(x = treatment, y = time_diap, color = core_edge),
+             position = position_jitterdodge(dodge.width = 0.5, jitter.width = 0.2), alpha = 0.5) +
+  
+  #population lines and points
+  geom_line(data = meansDiapausingPops_df, aes(group = population),
+            position = position_dodge(width = 0.5), alpha = 0.5) +
+  geom_pointrange(data = meansDiapausingPops_df, aes(x = treatment, y = rate, ymin = asymp.LCL, ymax = asymp.UCL, group = population, fill = core_edge),
+                  position = position_dodge(width = 0.5),
+                  color = 'black', alpha = .5, shape = 22, size = 0.75) +
+  
+  #core/edge lines and points
+  geom_line(aes(group = core_edge), position = position_dodge(width = 0.5), linewidth = 1.2) +
+  geom_pointrange(aes(x = treatment, y = rate, ymin = asymp.LCL, ymax = asymp.UCL),
+                  position = position_dodge(width = 0.5), shape = 21, size = 1) +
+  
+  #sample size
+  geom_text(aes(label = dtd_n1, y = -1.5), position = position_dodge(width = 0.5)) +
+  
+  #formatting
+  labs(x = "Diapause-Inducing Daylength", y = "Days to Diapause (95% CI)", fill = "Collection \nLocation") +
+  scale_x_discrete(labels = c('long' = "North", 'short' = "South")) +
+  scale_color_manual(values = c('core' = 'grey75', 'edge' = 'grey25'), labels = c('edge' = "South", 'core' = "North")) +
+  guides(color = 'none') +
+  scale_fill_manual(values = c('core' = 'white', 'edge' = 'black'), labels = c('edge' = "South", 'core' = "North")) +
+  theme_bw(base_size = 15)
+```
+
+### All samples
+```{r}
+## summarize data
+summ_dtd_all_pop <- diapauseData3 %>% group_by(treatment, population) %>% summarise(
+  mean = mean(time),
+  sd = sd(time),
+  n = n()
+)
+
+mean(summ_dtd_all_pop$n)
+
+summ_dtd_all_pop <- summ_dtd_all_pop %>% mutate(n2 = replace(n, n==26, 'n=26') )
+
+summ_dtd_all <- diapauseData3 %>% group_by(treatment, core_edge) %>% summarise(
+  mean = mean(time),
+  sd = sd(time),
+  n = n()
+)
+summ_dtd_all <- summ_dtd_all %>% mutate(n2 = replace(n, n==170, 'n = 170         ') )
+
+
+## model with core_Edge, pop as rand
+modAllSamp <- glmmTMB(time_diap ~ core_edge * treatment + (1| population), data = diapauseData3,
+                         family = poisson())
+simulateResiduals(modAllSamp) %>% plot()
+summary(modAllSamp)
+Anova(modAllSamp, type = 3)
+emmeans(modAllSamp, pairwise ~ core_edge|treatment, type = 'response')
+emmeans(modAllSamp, pairwise ~ treatment|core_edge, type = 'response')
+
+ranef(modAllSamp, condVar = F)
+coef(modAllSamp)
+ggpredict(modAllSamp, terms = c("population"), type = "random", condition = c(treatment = 'long'))
+
+emoutmodAllSamp <- emmeans(modAllSamp, pairwise ~ core_edge*treatment, type = "response")
+emoutmodAllSamp_df <- as.data.frame(emoutmodAllSamp$emmeans)
+emoutmodAllSamp_df$core_edge <- factor(emoutmodAllSamp_df$core_edge, levels = c('core', 'edge'))
+
+# Population analyses - all samples
+modAllSamppop <- glmmTMB(time_diap ~  treatment * population, data = diapauseData3,
+                            family = poisson())
+simulateResiduals(modAllSamppop) %>% plot()
+summary(modAllSamppop)
+Anova(modAllSamppop, type = 3)
+emmeans(modAllSamppop, pairwise ~ treatment|population, type = 'response')
+
+emoutAllSampPops <- emmeans(modAllSamppop, pairwise ~ population*treatment, type = "response")
+emoutAllSampPops_df <- as.data.frame(emoutAllSampPops$emmeans) %>%
+  mutate(core_edge = case_when(
+    population == "Bl" | population == "Lc" | population == "Lj" | population == "Wi" ~ "edge",
+    population == "De" | population == "Hu" | population == "Lo" | population == "Pu" ~ "core"
+  ))
+emoutAllSampPops_df$population <- factor(emoutAllSampPops_df$population, levels = c('Lo', 'Hu', 'De', 'Pu', 'Lc', 'Wi', 'Lj', 'Bl'))
+
+```
+
+
+```{r, fig.width=8}
+# Reaction Norm Plot
+allSamp_coreedge_plot <- ggplot(data = emoutmodAllSamp_df, aes(x = treatment, y = rate, fill = core_edge)) +
+  annotate('rect', xmin = c(0.8,1.8), xmax = c(1.2, 2.2), ymin = 42, ymax = 44, alpha = 0.2, color = "black") +
+  geom_point(data = diapauseData3, aes(x = treatment, y = time_diap, fill = core_edge),
+             position = position_jitterdodge(dodge.width = 0.35, jitter.width = 0.15),
+             alpha = 0.25) +
+  geom_line(aes(group = core_edge), position = position_dodge(width = 0.35), size = 0.73) +
+  geom_pointrange(aes(x = treatment, y = rate, ymin = lower.CL, ymax = upper.CL),
+                  position = position_dodge(width = 0.35), shape = 21, size = 0.8) +
+  geom_text(data = summ_dtd_all, aes(label = n2, y = -1.5), position = position_dodge(width = 0.35)) +
+  annotate("label", x = c(1,2), y = 45.5, label = "Non-Diapausers") +
+  labs(x = "Diapause-Inducing Daylength", y = "Days to Diapause (95% CI)", fill = "Collection \nLocation") +
+  scale_x_discrete(labels = c('long' = "North", 'short' = "South")) +
+  scale_fill_manual(values = c('core' = 'white', 'edge' = 'black'), labels = c('edge' = "South", 'core' = "North")) +
+  theme_bw(base_size = 15)
+
+allSamp_pop_plot <- ggplot(data = emoutAllSampPops_df) +
+  annotate('rect', xmin = 0.75, xmax = 8.25, ymin = 42, ymax = 44, alpha = 0.2, color = 'black') +
+  geom_point(data = diapauseData3, aes(x = population, y = time_diap),
+             position = position_jitter(width = 0.15), alpha = 0.25) +
+  geom_pointrange(aes(x = population, y = rate, ymin = lower.CL, ymax = upper.CL, fill = core_edge),
+                  color = 'black', shape = 21, size = 0.8) +
+  facet_grid( ~ treatment, labeller = labeller(treatment = c('long' = "Northern Daylength", 'short' = "Southern Daylength"))) +
+  geom_text(data = summ_dtd_all_pop, aes(label = n2, x = population, y = -1)) +
+  annotate("label", x = 4.5, y = 46, label = "Non-Diapausers") +
+  labs(x = "Collection Location (N to S)", y = "Days to Diapause (95% CI)", fill = "Collection \nLocation") +
+  scale_x_discrete(labels = c('Lo' = 'A', 'Hu' = 'B', 'De' = 'C', 'Pu' = 'D', 'Lc' = 'E', 'Wi' = 'F', 'Lj' = 'G', 'Bl' = 'H')) +
+  scale_fill_manual(values = c('core' = 'white', 'edge' = 'black'), labels = c('edge' = "South", 'core' = "North")) +
+  theme_bw(base_size = 15) +
+  theme(strip.background = element_rect(fill = 'white'))
+
+##Combining figures for publication
+ggarrange(allSamp_coreedge_plot, allSamp_pop_plot, 
+          common.legend = T, 
+          legend = 'right', 
+          widths = c(1.3,2),
+          labels = 'AUTO')
+##export: width = 1100, height = 575 (11.46in x 5.99in)
+
+## Combining population and core edge plots in reaction norm style ----
+days_plot1 <- ggplot(data = emoutmodAllSamp_df, aes(x = treatment, y = rate, fill = core_edge)) +
+  #box for non-diapausers
+  annotate('rect', xmin = c(0.7,1.7), xmax = c(1.3, 2.3), ymin = 42, ymax = 44, fill = 'grey95', color = "white") +
+  # 
+  # #add data points
+  geom_point(data = diapauseData3, aes(x = treatment, y = time_diap, color = core_edge),
+    position = position_jitterdodge(dodge.width = 0.5, jitter.width = 0.2), alpha = 0.5) +
+
+  #population lines and points
+  geom_line(data = emoutAllSampPops_df, aes(group = population),
+            position = position_dodge(width = 0.5), alpha = 0.5) +
+  geom_pointrange(data = emoutAllSampPops_df, aes(x = treatment, y = rate, ymin = lower.CL, ymax = upper.CL, group = population,
+                                                  fill = core_edge),
+                  position = position_dodge(width = 0.5),
+                  color = 'black', alpha = .5, shape = 22, size = 0.75) +
+  ylim(0,52)+
+
+  #core/edge lines and points
+  geom_line(aes(group = core_edge), position = position_dodge(width = 0.5), linewidth = 1.2) +
+  geom_pointrange(aes(x = treatment, y = rate, ymin = lower.CL, ymax = upper.CL),
+                  position = position_dodge(width = 0.5), shape = 21, size = 1) +
+
+  #sample size
+  geom_text(data = summ_dtd_all, aes(label = n2, y = 1.5), position = position_dodge(width = 0.35)) +
+  
+  #non-diapauser label
+  annotate("label", x = c(1,2), y = 45.5, label = "Non-Diapausers", fill = 'grey95', label.size = NA) +
+  
+  #formatting
+  labs(x = "Diapause-Inducing Daylength", y = "Days to Diapause (95% CI)", fill = "Collection \nLocation") +
+  scale_x_discrete(labels = c('long' = "North", 'short' = "South")) +
+  scale_color_manual(values = c('core' = 'grey75', 'edge' = 'grey25'), labels = c('edge' = "South", 'core' = "North")) +
+  guides(color = 'none') +
+  scale_fill_manual(values = c('core' = 'white', 'edge' = 'black'), labels = c('edge' = "South", 'core' = "North")) +
+  theme_bw(base_size = 15)
+days_plot1
+```
+
+### Survival analysis
+
+```{r}
+#Models
+
+## Create survival object
+survObj <- Surv(diapauseData3$time, diapauseData3$diapause)
+
+## Population
+model1c <- survreg(survObj ~ population * treatment, dist = "gaussian", data = diapauseData3)
+model1c
+anova(model1c)
+emmeans(model1c, pairwise ~ treatment | population, type = "response")
+survreg_means <- emmeans(model1c, pairwise ~ treatment | population, type = "response")
+survreg_means_df <- as.data.frame(survreg_means$emmeans) %>%
+  mutate(core_edge = case_when(
+    population == "Bl" | population == "Lc" | population == "Lj" | population == "Wi" ~ "edge",
+    population == "De" | population == "Hu" | population == "Lo" | population == "Pu" ~ "core"
+  )) %>%
+  unite("treatment_core_edge", c(treatment,core_edge), remove = F)
+
+## Core and Edge
+model1b_2 <- survreg(survObj ~ core_edge * treatment + population, dist ="gaussian", data = diapauseData3)
+model1b_2
+summary(model1b_2)
+emmeans(model1b_2, pairwise ~ treatment | core_edge, type = "response")
+survreg_means_CE <- emmeans(model1b_2, pairwise ~ treatment | core_edge, type = "response")
+survreg_means_CE_df <- as.data.frame(survreg_means_CE$emmeans) %>%
+  unite("treatment_core_edge", c(treatment,core_edge), remove = F)
+```
+
+```{r, fig.width=8}
+#Plots
+surv_coreedge_plot <- ggplot(data = survreg_means_CE_df, aes(x = treatment, y = emmean, fill = core_edge)) +
+  # annotate('rect', xmin = c(0.8,1.8), xmax = c(1.2, 2.2), ymin = 42, ymax = 44, alpha = 0.2, color = "black") +
+  # geom_point(data = diapauseData3, aes(x = treatment, y = time_diap, fill = core_edge),
+  #            position = position_jitterdodge(dodge.width = 0.35, jitter.width = 0.15),
+  #            alpha = 0.25) +
+  geom_line(aes(group = core_edge), position = position_dodge(width = 0.35), size = 0.73) +
+  geom_pointrange(aes(x = treatment, y = emmean, ymin = lower.CL, ymax = upper.CL),
+                  position = position_dodge(width = 0.35), shape = 21, size = 0.8) +
+  # geom_text(data = summ_dtd_all, aes(label = n2, y = -1.5), position = position_dodge(width = 0.35)) +
+  # annotate("label", x = c(1,2), y = 45.5, label = "Non-Diapausers") +
+  labs(x = "Diapause-Inducing Daylength", y = "Days to Diapause (95% CI)", fill = "Collection \nLocation") +
+  scale_x_discrete(labels = c('long' = "North", 'short' = "South")) +
+  scale_fill_manual(values = c('core' = 'white', 'edge' = 'black'), labels = c('edge' = "South", 'core' = "North")) +
+  theme_bw(base_size = 15)
+
+surv_pop_plot <- ggplot(data = survreg_means_df %>% filter(treatment_core_edge != 'long_x')) +
+  # annotate('rect', xmin = 0.75, xmax = 8.25, ymin = 42, ymax = 44, alpha = 0.2, color = 'black') +
+  # geom_point(data = diapauseData3, aes(x = population, y = time_diap),
+  #            position = position_jitter(width = 0.15), alpha = 0.25) +
+  geom_pointrange(aes(x = population, y = emmean, ymin = lower.CL, ymax = upper.CL, fill = core_edge),
+                  color = 'black', shape = 21, size = 0.8) +
+  facet_grid( ~ treatment, labeller = labeller(treatment = c('long' = "Northern Daylength", 'short' = "Southern Daylength"))) +
+  # geom_text(data = summ_dtd_all_pop, aes(label = n2, x = population, y = -1)) +
+  # annotate("label", x = 4.5, y = 46, label = "Non-Diapausers") +
+  labs(x = "Collection Location (N to S)", y = "Days to Diapause (95% CI)", fill = "Collection \nLocation") +
+  scale_x_discrete(labels = c('Lo' = 'A', 'Hu' = 'B', 'De' = 'C', 'Pu' = 'D', 'Lc' = 'E', 'Wi' = 'F', 'Lj' = 'G', 'Bl' = 'H')) +
+  scale_fill_manual(values = c('core' = 'white', 'edge' = 'black'), labels = c('edge' = "South", 'core' = "North")) +
+  theme_bw(base_size = 15) +
+  theme(strip.background = element_rect(fill = 'white'))
+
+ggarrange(surv_coreedge_plot, surv_pop_plot, 
+          common.legend = T, 
+          legend = 'right', 
+          widths = c(1.3,2),
+          labels = 'AUTO')
+##export: width = 1100, height = 575 (11.46in x 5.99in)
+
+## Combining population and core edge plots in reaction norm style ----
+ggplot(data = survreg_means_CE_df, aes(x = treatment, y = emmean, fill = core_edge)) +
+  #box for non-diapausers
+  annotate('rect', xmin = c(0.7,1.7), xmax = c(1.3, 2.3), ymin = 42, ymax = 44, fill = 'grey95', color = "white") +
+  
+  #add data points
+  geom_point(data = diapauseData3, aes(x = treatment, y = time_diap, color = core_edge),
+             position = position_jitterdodge(dodge.width = 0.5, jitter.width = 0.2), alpha = 0.5) +
+  
+  #population lines and points
+  geom_line(data = survreg_means_df, aes(group = population),
+            position = position_dodge(width = 0.5), alpha = 0.5) +
+  geom_pointrange(data = survreg_means_df, aes(x = treatment, y = emmean, ymin = lower.CL, ymax = upper.CL, group = population, fill = core_edge),
+                  position = position_dodge(width = 0.5),
+                  color = 'black', alpha = .5, shape = 22, size = 0.75) +
+  
+  #core/edge lines and points
+  geom_line(aes(group = core_edge), position = position_dodge(width = 0.5), size = 1.2) +
+  geom_pointrange(aes(x = treatment, y = emmean, ymin = lower.CL, ymax = upper.CL),
+                  position = position_dodge(width = 0.5), shape = 21, size = 1) +
+  
+  #non-diapauser label
+  annotate("label", x = c(1,2), y = 47, label = "Non-Diapausers", fill = 'grey95', label.size = NA) +
+  
+  #sample size
+  # geom_text(aes(label = dtd_n1, y = -1.5), position = position_dodge(width = 0.5)) +
+  
+  #formatting
+  labs(x = "Diapause-Inducing Daylength", y = "Days to Diapause (95% CI)", fill = "Collection \nLocation") +
+  scale_x_discrete(labels = c('long' = "North", 'short' = "South")) +
+  scale_color_manual(values = c('core' = 'grey75', 'edge' = 'grey25'), labels = c('edge' = "South", 'core' = "North")) +
+  guides(color = 'none') +
+  scale_fill_manual(values = c('core' = 'white', 'edge' = 'black'), labels = c('edge' = "South", 'core' = "North")) +
+  theme_bw(base_size = 15)
+```
+
+## Proportion in diapause
+
+```{r}
+## Logistic Regression
+
+diapusePropSummaryPop <- diapauseData3 %>% group_by(population, treatment) %>%
+  summarise(
+    n = n(),
+    prop = mean(diapause),
+    sd = sd(diapause),
+    se = sd/sqrt(n),
+    latitude = mean(latitude)
+  )
+diapusePropSummaryPop
+
+diapauseData3 %>% group_by(treatment, core_edge) %>% summarise(
+  mean_time = mean(time),
+  prop = mean(diapause),
+  sd_prop = sd(diapause),
+  n = n()
+)
+
+##Sample size 
+prop_sample_size <- diapauseData3 %>% group_by(population, treatment) %>% summarize (
+  n = n()
+)
+mean(prop_sample_size$n)
+
+diapauseData3$population <- factor(diapauseData3$population, levels = c('Lo', 'Hu', 'De', 'Pu', 'Lc', 'Wi', 'Lj', 'Bl'))
+diapauseData3$core_edge <- factor(diapauseData3$core_edge, levels = c('core', 'edge'))
+
+#Model core/edge
+logmodel1 <- glmmTMB(diapause ~ core_edge * treatment + (1|population), family = "binomial", data = diapauseData3)
+simulateResiduals(logmodel1) %>% plot()
+summary(logmodel1)
+Anova(logmodel1, type = 3)
+ranef(logmodel1, condVar = F)
+coef(logmodel1)
+emmeans(logmodel1, pairwise ~ core_edge | treatment, type = "response")
+
+logistic_means_ce <- emmeans(logmodel1, pairwise ~ treatment * core_edge, type = "response")
+logistic_means_ce_df <- as.data.frame(logistic_means_ce$emmeans) %>%
+  unite("treatment_core_edge", c(treatment,core_edge), remove = F)
+
+## Bayesian approach to fix complete separation ----
+library(arm)
+logmodel_bayes <- bayesglm(diapause ~ population * treatment, family = 'binomial', data = diapauseData3)
+summary(logmodel_bayes)
+Anova(logmodel_bayes, type = 3)
+emmeans(logmodel_bayes, pairwise ~ treatment | population, type = "response")
+logisticbayes_means_pop <- emmeans(logmodel_bayes, pairwise ~ treatment * population, type = "response")
+logisticbayes_means_pop_df <- as.data.frame(logisticbayes_means_pop$emmeans) %>%
+  mutate(core_edge = case_when(
+    population == "Bl" | population == "Lc" | population == "Lj" | population == "Wi" ~ "edge",
+    population == "De" | population == "Hu" | population == "Lo" | population == "Pu" ~ "core"
+  ))
+logisticbayes_means_pop_df$population <- factor(logisticbayes_means_pop_df$population, levels = c('Lo', 'Hu', 'De', 'Pu', 'Lc', 'Wi', 'Lj', 'Bl'))
+
+
+```
+
+```{r}
+#Plots
+# Reaction Norm Plot - core/edge
+prop_coreedge_plot <- ggplot(data = logistic_means_ce_df, aes(x = treatment, y = prob, fill = core_edge)) +
+  geom_line(aes(group = core_edge), position = position_dodge(width = 0.35), size = 0.73) +
+  # geom_point(data = diapauseData3, aes(x = treatment, y = diapause, fill = core_edge),
+  #            position = position_jitterdodge(dodge.width = 0.35, jitter.width = 0.15, jitter.height = 0.05),
+  #            alpha = 0.25, shape = 16) +
+  geom_pointrange(aes(x = treatment, y = prob, ymin = lower.CL, ymax = upper.CL), 
+                  position = position_dodge(width = 0.35), shape = 21, size = 0.8, color = 'black') +
+  labs(x = "Diapause-Inducing Daylength", y = "Proportion in Diapause (95% CI)", fill = "Collection \nLocation") +
+  scale_x_discrete(labels = c('long' = "North", 'short' = "South")) +
+  scale_fill_manual(values = c('core' = 'white', 'edge' = 'black'), labels = c('edge' = "South", 'core' = "North")) +
+  theme_bw(base_size = 15)
+
+#plot of bayes logistic approach
+prop_population_bayes_plot <- ggplot(data = logisticbayes_means_pop_df) +
+  geom_pointrange(aes(x = population, y = prob, ymin = asymp.LCL, ymax = asymp.UCL, fill = core_edge), 
+                  shape = 21, size = 0.8) +
+  # geom_col(aes(x = population, y = prob), color = 'black', fill = 'white', size = 1) +
+  # geom_errorbar(aes(x = population, ymin = lower.CL, ymax = upper.CL), width = 0.4, size = 1) +
+  facet_grid( ~ treatment, labeller = labeller(treatment = c('long' = "Northern Daylength", 'short' = "Southern Daylength"))) +
+  # geom_point(data = diapauseData3, aes(x = population, y = diapause),
+  #            position = position_jitter(height = 0.05, width = 0.25), alpha = 0.25) +
+  labs(x = "Collection Location (N to S)", y = "Proportion in Diapause (95% CI)", fill = "Collection \nLocation") +
+  scale_fill_manual(values = c('core' = 'white', 'edge' = 'black'), labels = c('edge' = "South", 'core' = "North")) +
+  scale_x_discrete(labels = c('Lo' = 'A', 'Hu' = 'B', 'De' = 'C', 'Pu' = 'D', 'Lc' = 'E', 'Wi' = 'F', 'Lj' = 'G', 'Bl' = 'H')) +
+  theme_bw(base_size = 15) +
+  # ylim(-0.2,1.25) +
+  theme(strip.background = element_rect(fill = 'white'))
+
+##Combining plots for publication
+ggarrange(prop_coreedge_plot, prop_population_bayes_plot, 
+          common.legend = T, 
+          legend = 'right', 
+          widths = c(1.3,2),
+          labels = 'AUTO')
+##export: width = 1100, height = 575 (11.46in x 5.99in)
+
+## Combining population and core edge plots in reaction norm style----
+prop_plot1 <- ggplot(data = logistic_means_ce_df, aes(x = treatment, y = prob, fill = core_edge)) +
+  
+  #population lines and points
+  geom_line(data = logisticbayes_means_pop_df, aes(x = treatment, y = prob, group = population),
+            position = position_dodge(width = 0.5), alpha = 0.5) +
+  geom_pointrange(data = logisticbayes_means_pop_df, aes(x = treatment, y = prob, ymin = asymp.LCL, ymax = asymp.UCL, group = population, fill = core_edge),
+                  position = position_dodge(width = 0.5),
+                  color = 'black', alpha = .5, shape = 22, size = 0.75) +
+  
+  #core/edge lines and points
+  geom_line(aes(group = core_edge), position = position_dodge(width = 0.5), size = 1.2) +
+  geom_pointrange(aes(x = treatment, y = prob, ymin = lower.CL, ymax = upper.CL),
+                  position = position_dodge(width = 0.5), shape = 21, size = 1) +
+  
+  #sample size
+  # geom_text(aes(label = dtd_n1, y = -1.5), position = position_dodge(width = 0.5)) +
+  
+  #formatting
+  labs(x = "Diapause-Inducing Daylength", y = "Proportion in Diapause (95% CI)", fill = "Collection \nLocation") +
+  scale_x_discrete(labels = c('long' = "North", 'short' = "South")) +
+  scale_color_manual(values = c('core' = 'grey75', 'edge' = 'grey25'), labels = c('edge' = "South", 'core' = "North")) +
+  guides(color = 'none') +
+  scale_fill_manual(values = c('core' = 'white', 'edge' = 'black'), labels = c('edge' = "South", 'core' = "North")) +
+  theme_bw(base_size = 15)
+prop_plot1
+```
+
+```{r}
+#Combine proportion in diapause with days until diapause plots
+ggarrange(prop_plot1, days_plot1, nrow = 1, labels = "AUTO", common.legend = T, legend = 'bottom')
+##export: width = 939, height = 638
+```
+
+
+## Environmental Variable regressions
+```{r}
+#ENVIRO VARIABLE REGRESSIONS ----
+##Are latitude, elevation, and degree days correlated at the 8 sites?
+
+#EDGE
+cor.test(site_char$latitude[5:8], site_char$elevation[5:8])
+cor.test(site_char$latitude[5:8], site_char$degree_days[5:8])
+cor.test(site_char$elevation[5:8], site_char$degree_days[5:8])
+
+#CORE
+cor.test(site_char$latitude[1:4], site_char$elevation[1:4])
+cor.test(site_char$latitude[1:4], site_char$degree_days[1:4])
+cor.test(site_char$elevation[1:4], site_char$degree_days[1:4])
+```
+For all sites: Latitude and elevation are not correlated among the 8 sites (Pearson's=0.131, P=0.758). Degree days is negatively correlated (Pearson's) with both latitude (-0.716, P=0.046) and elevation (-0.743, P=0.035).
+
+For edge sites: Latitude and elevation are not sig. correlated (-0.861, P=0.14). Degree days is correlated with latitude (-0.953, P=0.047), but not altitude (0.771, P=0.229)
+
+For core sites: Latitude and elevation are correlated (0.964, P=0.04). Degree days is not sig. correlated with latitude (-0.879, P=0.12) nor altitude (-0.948, P= 0.052)
+
+
+```{r}
+avPlots.invis <- function(MODEL, ...) {
+  
+  ff <- tempfile()
+  png(filename = ff)
+  OUT <- car::avPlots(MODEL, ...)
+  dev.off()
+  unlink(ff)
+  OUT }
+
+ggAVPLOTS  <- function(MODEL, YLAB = NULL) {
+  
+  #Extract the information for AV plots
+  AVPLOTS <- avPlots.invis(MODEL)
+  K       <- length(AVPLOTS)
+  
+  #Create the added variable plots using ggplot
+  GGPLOTS <- vector('list', K)
+  for (i in 1:K) {
+  DATA         <- data.frame(AVPLOTS[[i]])
+  GGPLOTS[[i]] <- ggplot2::ggplot(aes_string(x = colnames(DATA)[1], 
+                                             y = colnames(DATA)[2]), 
+                                  data = DATA) +
+                  geom_jitter(colour = 'black', width = diff(range((DATA)[1]/60))) + 
+                  geom_smooth(method = 'lm', se = FALSE, 
+                              color = 'black', formula = y ~ x, linetype = 'dashed') +
+                  theme_bw(base_size = 15) +
+                  xlab(paste0('Predictor Residual \n (', 
+                         names(DATA)[1], ' | others)')) +
+                  ylab(paste0('Response Residual \n (',
+                         ifelse(is.null(YLAB), 
+                           paste0(names(DATA)[2], ' | others'), YLAB), ')')) }
+  
+  #Return output object
+  GGPLOTS }
+
+```
+
+```{r}
+##which of the three variables best predicts responses in core and edge separately - based on r2 or AIC??
+## Edge, Short 
+e_s <- diapauseData3 %>% filter(core_edge == 'edge') %>% filter(treatment == 'short')
+
+mod_e_s_all1 <- lm(time_diap ~ latitude + elevation + degree_days, data = e_s)
+vif(mod_e_s_all1)
+summary(mod_e_s_all1)
+
+
+mod_e_s_all <- lm(time_diap ~ latitude + elevation , data = e_s)
+summary(mod_e_s_all)
+Anova(mod_e_s_all, type = 3)
+plot(simulateResiduals(mod_e_s_all))
+avPlots(mod_e_s_all)
+
+avPlots.invis(mod_e_s_all)[[1]] %>% View()
+e_s_plots <- ggAVPLOTS(mod_e_s_all, YLAB = "Days to diapause")
+ggarrange(e_s_plots[[1]], e_s_plots[[2]])
+
+mod_e_s_ele2 <- lm(time_diap ~ elevation + degree_days, data = e_s)
+summary(mod_e_s_ele2)
+e_s_plots_2 <- ggAVPLOTS(mod_e_s_ele2, YLAB = "Days to diapause")
+ggarrange(e_s_plots_2[[1]], e_s_plots_2[[2]])
+
+
+mod_e_s_lat <- lm(time_diap ~ latitude, data = e_s)
+summary(mod_e_s_lat)
+
+mod_e_s_ele <- lm(time_diap ~ elevation, data = e_s)
+summary(mod_e_s_ele)
+
+mod_e_s_deg <- lm(time_diap ~ degree_days, data = e_s)
+summary(mod_e_s_deg)
+```
+
+
+```{r}
+##Plots edge in short treatment----
+
+site_char$letter <- c("H", "E", "G", "F", "C", "B", "A", "D")
+
+e_lat <- ggplot(data = e_s, aes(x = latitude, y = time_diap)) +
+  geom_smooth(method = lm, color = 'black') +
+  geom_jitter(width = .01, height = 0.2) +
+  theme_bw(base_size = 15) +
+  labs(y = "Days to Diapause", x = "Latitude") +
+  annotate("text", y = 37, x = 34.2, label = "italic(R) ^ 2 == 0.226", parse = TRUE, size = 6) +
+  annotate("text", y = -2, x = site_char$latitude[1:4], label = site_char$letter[1:4], size = 4) +
+  theme(panel.grid = element_blank())
+e_lat
+
+e_ele <- ggplot(data = e_s, aes(x = elevation, y = time_diap)) +
+  geom_smooth(method = lm, color = 'black') +
+  geom_jitter(width = 15, height = 0.2) +
+  theme_bw(base_size = 15) +
+  labs(y = "Days to Diapause", x = "Elevation") +
+  annotate("text", y = 37, x = 850, label = "italic(R) ^ 2 == 0.340", parse = TRUE, size = 6) +
+  annotate("text", y = -2, x = site_char$elevation[1:4], label = site_char$letter[1:4], size = 4) +
+  theme(panel.grid = element_blank())
+e_ele
+
+e_deg <- ggplot(data = e_s, aes(x = degree_days, y = time_diap)) +
+  geom_smooth(method = lm, color = 'black') +
+  geom_jitter(width = 15, height = 0.2) +
+  theme_bw(base_size = 15) +
+  labs(y = "Days to Diapause", x = "Cumulative Degree Days") +
+  annotate("text", y = 37, x = 2750, label = "italic(R) ^ 2 == 0.494", parse = TRUE, size = 6) +
+  annotate("text", y = -2, x = site_char$degree_days[1:4], label = site_char$letter[1:4], size = 4) +
+  theme(panel.grid = element_blank())
+e_deg
+
+e_plots <- ggarrange(e_lat,e_ele,e_deg, nrow = 1) %>% annotate_figure(top = text_grob("Edge Sites in Southern Environment", face = "bold", size = 15))
+#export: 1750 x 700 px
+```
+
+
+```{r}
+## Core, Long 
+c_l <- diapauseData3 %>% filter(core_edge == 'core') %>% filter(treatment == 'long')
+
+mod_c_l_all1 <- lm(time_diap ~ latitude+degree_days+elevation, data = c_l)
+vif(mod_c_l_all1)
+
+mod_c_l_all <- lm(time_diap ~ latitude+degree_days, data = c_l)
+summary(mod_c_l_all)
+Anova(mod_c_l_all, type = 3)
+plot(simulateResiduals(mod_c_l_all))
+avPlots(mod_c_l_all)
+ggAVPLOTS(mod_c_l_all)
+c_l_plots <- ggAVPLOTS(mod_c_l_all, YLAB = "Days to diapause")
+ggarrange(c_l_plots[[1]], c_l_plots[[2]])
+# ggPredict(mod_c_l_all,interactive=TRUE)
+
+mod_c_l_ele2 <- lm(time_diap ~ elevation+degree_days, data = c_l)
+summary(mod_c_l_ele2)
+c_l_plots_2 <- ggAVPLOTS(mod_c_l_ele2, YLAB = "Days to diapause")
+ggarrange(c_l_plots_2[[1]], c_l_plots_2[[2]])
+
+
+
+mod_c_l_lat <- lm(time_diap ~ latitude, data = c_l)
+summary(mod_c_l_lat)
+
+mod_c_l_ele <- lm(time_diap ~ elevation, data = c_l)
+summary(mod_c_l_ele)
+
+mod_c_l_deg <- lm(time_diap ~ degree_days, data = c_l)
+summary(mod_c_l_deg)
+
+```
+
+```{r}
+##Plots core in long treatment----
+
+c_lat <- ggplot(data = c_l, aes(x = latitude, y = time_diap)) +
+  geom_smooth(method = lm, color = 'black') +
+  geom_jitter(width = .1, height = 0.2) +
+  theme_bw(base_size = 15) +
+  labs(y = "Days to Diapause", x = "Latitude") +
+  annotate("text", y = 37, x = 41, label = "italic(R) ^ 2 == 0.071", parse = TRUE, size = 6) +
+  annotate("text", y = -2, x = site_char$latitude[5:8], label = site_char$letter[5:8], size = 4) +
+  theme(panel.grid = element_blank())
+c_lat
+
+c_ele <- ggplot(data = c_l, aes(x = elevation, y = time_diap)) +
+  geom_smooth(method = lm, color = 'black') +
+  geom_jitter(width = 5, height = 0.2) +
+  theme_bw(base_size = 15) +
+  labs(y = "Days to Diapause", x = "Elevation") +
+  annotate("text", y = 37, x = 1250, label = "italic(R) ^ 2 == 0.084", parse = TRUE, size = 6) +
+  annotate("text", y = -2, x = site_char$elevation[5:8], label = site_char$letter[5:8], size = 4) +
+  theme(panel.grid = element_blank())
+c_ele
+
+c_deg <- ggplot(data = c_l, aes(x = degree_days, y = time_diap)) +
+  geom_smooth(method = lm, color = 'black') +
+  geom_jitter(width = 10, height = 0.2) +
+  theme_bw(base_size = 15) +
+  labs(y = "Days to Diapause", x = "Cumulative Degree Days") +
+  annotate("text", y = 37, x = 1600, label = "italic(R) ^ 2 == 0.036", parse = TRUE, size = 6) +
+  annotate("text", y = -2, x = site_char$degree_days[5:8], label = site_char$letter[5:8], size = 4) +
+  theme(panel.grid = element_blank())
+c_deg
+
+c_plots <- ggarrange(c_lat,c_ele,c_deg, nrow = 1) %>% annotate_figure(top = text_grob("Core Sites in Northern Environment", face = "bold", size = 15))
+#export: 1750 x 700 px
+
+ggarrange(c_plots, e_plots, nrow = 2, labels = 'AUTO')
+##export: 1031 x 645
+
+```
