@@ -202,16 +202,57 @@ y.n %>% group_by(treatment) %>% summarise(
 y.n %>% group_by(sire, dam) %>% summarise(
   noff = n()) #sample size of full-sib families
 
+# sample size per sire
+y.n %>% group_by(sire, treatment) %>% 
+  filter(is.na(dead) == TRUE) %>%
+  summarise(
+    noff = n())
+
+# sires with too few offspring to be included
+exclude_small_families <- y.n %>% group_by(sire, treatment) %>% 
+  filter(is.na(dead) == TRUE) %>%
+  summarise(
+    noff = n()) %>%
+  filter(noff < 2)
+
 short <- y.n %>% # create dataset for short treatment
-  filter(treatment == "S" & is.na(dead) == TRUE) # filter out dead beetles 
+  filter(treatment == "S" & is.na(dead) == TRUE) %>% # filter out dead beetles
+  anti_join(., exclude_small_families, by = c("sire", "treatment")) # remove sires with too few offspring
 hist(short$time, breaks = 50)
 
 long <- y.n %>% # create dataset for long treatment
-  filter(treatment == "L" & is.na(dead) == TRUE) # filter out dead beetles 
+  filter(treatment == "L" & is.na(dead) == TRUE) %>% # filter out dead beetles
+  anti_join(., exclude_small_families, by = c("sire", "treatment")) # remove sires with too few offspring
 hist(long$time, breaks = 50)
 str(long)
 
+short %>% group_by(sire) %>% 
+  summarise(
+    noff = n()) %>%
+  summarise(
+    max = max(noff),
+    min = min(noff),
+    nsire = n(),
+    mean = mean(noff)
+  )
+long %>% group_by(sire) %>% 
+  summarise(
+    noff = n()) %>%
+  summarise(
+    max = max(noff),
+    min = min(noff),
+    nsire = n(),
+    mean = mean(noff)
+  )
+# total individuals measured per treatment
+short %>% summarise(n())
+long %>% summarise(n())
 
+# # range of days to diapause in short and long
+# y.n %>% group_by(treatment) %>%
+#   summarise(min = min(time, na.rm = T),
+#             max = max(time, na.rm = T),
+#             mean = mean(time, na.rm = T))
 
 ### Random effects Models ----
 #Long day treatment
@@ -257,18 +298,24 @@ days_boot_sum_both <- rbind(boot_sum_days_L,boot_sum_days_S) # confidence interv
 days_boot_sum_both$var_comp <- factor(days_boot_sum_both$var_comp, levels = c('VP', 'VA', 'h2', 'I')) #change order of VA and VP
 levels(days_boot_sum_both$var_comp) <- c('V[Phenotypic]', 'V[Additive]', 'h^2', 'I[A]') #change labels for VA and VP
 
-Vars <- ggplot(data = days_boot_sum_both %>% filter(var_comp != 'h^2' & var_comp != 'I[A]'), aes(x = treatment, y = mean)) +
+Vars <- ggplot(data = days_boot_sum_both %>% filter(var_comp != 'h^2' & var_comp != 'I[A]'), 
+               aes(x = treatment, y = mean, color = treatment)) +
   #sd error bars
   # geom_linerange(aes(ymax = mean + sd, ymin = mean - sd),
   #                size = 1, lty = 'solid') +
   #conf int error bars
   geom_linerange(aes(ymax = CI.high, ymin = CI.low),
                  size = 1, lty = 'solid') +
-  geom_point(data = days_res_comb %>% filter(var_comp != 'h^2' & var_comp != 'I[A]'), aes(x = treatment, y = est, shape = treatment), size = 3, fill = 'white') +
+  geom_point(data = days_res_comb %>% filter(var_comp != 'h^2' & var_comp != 'I[A]'), 
+             aes(x = treatment, y = est, shape = treatment), fill = 'white',
+             size = 3) +
   facet_wrap( ~ var_comp, labeller = label_parsed, scales = "fixed") +
-  labs(y = "Variance of\ndays until diapause", x = "Environment") +
+  labs(y = "Variance", x = "Environment") +
   scale_x_discrete(labels = c('long' = "North\n(Home)", 'short' = "South\n(Away)"))+
-  scale_shape_manual(labels = c('long' = "Home", 'short' = "Away"), values = c('long' = 21, 'short' = 22)) +
+  scale_shape_manual(labels = c('long' = "Home", 'short' = "Away"), 
+                     values = c('long' = 16, 'short' = 21)) +
+  scale_color_manual(labels = c('long' = "Home", 'short' = "Away"), 
+                     values = c('long' = '#006b4d', 'short' = '#00eba9')) +
   theme_bw() +
   theme(text = element_text(size = 18), #axis.ticks.x = element_blank(),
         strip.placement = "outside", strip.background = element_blank(),
@@ -277,7 +324,8 @@ Vars <- ggplot(data = days_boot_sum_both %>% filter(var_comp != 'h^2' & var_comp
         legend.position = 'none')
 Vars
 
-Herit <- ggplot(data = days_boot_sum_both %>% filter(var_comp == 'h^2'), aes(x = treatment, y = mean)) +
+Herit <- ggplot(data = days_boot_sum_both %>% filter(var_comp == 'h^2'), 
+                aes(x = treatment, y = mean, color = treatment)) +
   #sd error bars
   # geom_linerange(aes(ymax = mean + sd, ymin = mean - sd),
   #                size = 1, lty = 'solid') +
@@ -287,12 +335,16 @@ Herit <- ggplot(data = days_boot_sum_both %>% filter(var_comp == 'h^2'), aes(x =
                  size = 1, lty = 'solid') +
   scale_y_continuous(breaks = c(0,0.5,1), limits = c(-0.05, 1.49)) +
   #h2 means
-  geom_point(data = days_res_comb %>% filter(var_comp == 'h^2'), aes(x = treatment, y = est, shape = treatment), size = 3, fill = 'white') +
+  geom_point(data = days_res_comb %>% filter(var_comp == 'h^2'), 
+             aes(x = treatment, y = est, shape = treatment), fill = 'white',
+             size = 3) +
   #formatting
   facet_wrap( ~ var_comp, labeller = label_parsed, scales = "fixed") +
-  labs(y = "Heritability of\ndays until diapause", x = "Environment") +
+  labs(y = "Heritability", x = "Environment") +
   scale_x_discrete(labels = c('long' = "North\n(Home)", 'short' = "South\n(Away)")) +
-  scale_shape_manual(values = c('long' = 21, 'short' = 22)) +
+  scale_shape_manual(values = c('long' = 16, 'short' = 21)) +
+  scale_color_manual(labels = c('long' = "Home", 'short' = "Away"), 
+                     values = c('long' = '#006b4d', 'short' = '#00eba9')) +
   theme_bw() +
   theme(text = element_text(size = 18), #axis.ticks.x = element_blank(),
         strip.placement = "outside", strip.background = element_blank(),
@@ -301,19 +353,24 @@ Herit <- ggplot(data = days_boot_sum_both %>% filter(var_comp == 'h^2'), aes(x =
         legend.position = 'none')
 Herit
 
-Evolv <- ggplot(data = days_boot_sum_both %>% filter(var_comp == 'I[A]'), aes(x = treatment, y = mean)) +
+Evolv <- ggplot(data = days_boot_sum_both %>% filter(var_comp == 'I[A]'), 
+                aes(x = treatment, y = mean, color = treatment)) +
   #sd error bars
   # geom_linerange(aes(ymax = mean + sd, ymin = mean - sd),
   #                size = 1, lty = 'solid') +
   #conf int error bars
   geom_linerange(aes(ymax = CI.high, ymin = CI.low),
                  size = 1, lty = 'solid') +
-  geom_point(data = days_res_comb %>% filter(var_comp == 'I[A]'), aes(x = treatment, y = est, shape = treatment), size = 3, fill = 'white') +
+  geom_point(data = days_res_comb %>% filter(var_comp == 'I[A]'), 
+             aes(x = treatment, y = est, shape = treatment), fill = 'white',
+             size = 3) +
   facet_wrap( ~ var_comp, labeller = label_parsed, scales = "fixed") +
-  labs(y = "Evolvability of\ndays until diapause", x = "Environment") +
+  labs(y = "Evolvability", x = "Environment") +
   scale_x_discrete(labels = c('long' = "North\n(Home)", 'short' = "South\n(Away)")) +
-  scale_shape_manual(values = c('long' = 21, 'short' = 22)) +
+  scale_shape_manual(values = c('long' = 16, 'short' = 21)) +
   scale_y_continuous(breaks = c(0,0.5,1), limits = c(-0.05, 1.14)) +
+  scale_color_manual(labels = c('long' = "Home", 'short' = "Away"), 
+                     values = c('long' = '#006b4d', 'short' = '#00eba9')) +
   theme_bw() +
   theme(text = element_text(size = 18), #axis.ticks.x = element_blank(),
         strip.placement = "outside", strip.background = element_blank(),
@@ -324,7 +381,7 @@ Evolv
 
 ggarrange(Vars, Herit, Evolv, ncol = 3, widths = c(.8, 0.5, 0.5), labels = 'AUTO')
 
-ggsave("plots/Fig5_diapause_h2.png", width = 9.375, height = 4.69, units = "in")
+ggsave("plots/Fig5_diapause_h2.png", width = 9, height = 4, units = "in")
 
 
 
@@ -336,26 +393,42 @@ resim_short <- REsim(mixedShort1) %>% mutate(treat = 'short') %>% #short dataset
 
 resim_long <- REsim(mixedLong1) %>% mutate(treat = 'long') %>% #long dataset
   mutate(addIntercept = mean + fixef(mixedLong1)) %>% 
-  arrange(addIntercept) %>%
-  mutate(groupID2 = factor(groupID, levels = groupID)) %>%
+  # arrange(addIntercept) %>%
+  # mutate(groupID_order = row_number()) %>%
+  # mutate(groupID2 = factor(groupID, levels = groupID)) %>%
   mutate(conf = sd * qnorm(1-((1-0.95)/2)))
 plotREsim(resim_long, stat = 'mean')
 str(resim_long)
 
+order_key <- resim_long %>%
+  arrange(addIntercept) %>%
+  mutate(groupID_order = seq(1:nrow(resim_long))) %>%
+  select(groupID, groupID_order)
+
+resim_short <- resim_short %>%
+  left_join(., order_key, by = 'groupID')
+resim_long <- resim_long %>%
+  left_join(., order_key, by = 'groupID') 
+range(resim_long$addIntercept)
+range(resim_short$addIntercept)
 
 
-long.plot <- long %>% arrange(match(sire, resim_long$groupID))
-long.plot <- long.plot %>% mutate(sire2 = factor(sire, levels = resim_long$groupID))
+long.plot <- long %>% 
+  left_join(., order_key, by = c('sire' = 'groupID'))
+short.plot  <- short %>% 
+  left_join(., order_key, by = c('sire' = 'groupID'))
 
-short.plot <- short %>% arrange(match(sire, resim_long$groupID))
-short.plot <- short.plot %>% mutate(sire2 = factor(sire, levels = resim_long$groupID))
 
-
-varAmongFams <- ggplot(data = resim_long, aes(x = groupID2, y = addIntercept)) +
+varAmongFams <- ggplot(data = resim_long, aes(x = groupID_order, y = addIntercept)) +
   # geom_point(aes(fill = treat), size = 3, shape = 21) +  #For means, without sd
   #add background points
-  geom_point(data = long.plot, aes(x = sire2, y = time), position = position_jitter(width = 0.15), size = 1, shape = 16, alpha = 0.25) +
-  geom_point(data = short.plot, aes(x = sire2, y = time), position = position_jitter(width = 0.15), size = 1, shape = 15, alpha = 0.75) +
+  geom_point(data = long.plot, 
+             aes(x = groupID_order, y = time), 
+             position = position_jitter(width = 0.15), 
+             size = 1, shape = 19, alpha = 0.5, color = '#006b4d') +
+  geom_point(data = short.plot, aes(x = groupID_order, y = time), 
+             position = position_jitter(width = 0.15), 
+             size = 1, shape = 19, alpha = 0.5, color = '#00eba9', fill = 'white') +
   
   #add family means and error bars
   # geom_pointrange(aes(ymin = addIntercept - sd, ymax = addIntercept + sd, shape = treat), #For means with sd
@@ -364,22 +437,28 @@ varAmongFams <- ggplot(data = resim_long, aes(x = groupID2, y = addIntercept)) +
   # fatten = 2, size = 1, fill = 'white') + #, shape = 21) +
   
   #means with CI
-  geom_pointrange(aes(x = groupID2, ymin = addIntercept - conf, ymax = addIntercept + conf, shape = treat), #For means with CI
-                  fatten = 4, size = 0.5, fill = 'white', position = position_nudge(x = -0.2)) + #shape = 21) +
-  geom_pointrange(data = resim_short, aes(x = groupID, ymin = addIntercept - conf, ymax = addIntercept + conf, shape = treat),
-                  fatten = 4, size = 0.5, fill = 'white', position = position_nudge(x = 0.2)) + #, shape = 21) +
+  geom_pointrange(aes(x = groupID_order, ymin = addIntercept - conf, ymax = addIntercept + conf, 
+                      shape = treat), #For means with CI
+                  fatten = 4, size = 0.5, color = '#006b4d', fill = 'white', 
+                  position = position_nudge(x = -0.1)) + #shape = 21) +
+  geom_pointrange(data = resim_short, 
+                  aes(x = groupID_order, ymin = addIntercept - conf, ymax = addIntercept + conf, 
+                      shape = treat),
+                  fatten = 4, size = 0.5, color = '#00eba9', fill = 'white', 
+                  position = position_nudge(x = 0.1)) + #, shape = 21) +
   #formatting
   # lims(y = c(0,31)) +
   labs(x = "Rank order of families", y = "Days until diapause", shape = "Environment") +
-  scale_shape_manual(labels = c('long' = "North fall (home)", 'short' = "South fall (away)"), values = c(21, 22))+# c('long' = , 'short' = '2')) +
+  scale_shape_manual(labels = c('long' = "North (home)", 'short' = "South (away)"), 
+                     values = c(16, 21))+# c('long' = , 'short' = '2')) +
   theme_classic() +
   theme(text = element_text(size = 18), axis.ticks.x = element_blank(),
         axis.text.x=element_blank(),
         panel.grid.major = element_blank(), 
         panel.grid.minor = element_blank(),
-        legend.position = 'right')
+        legend.position = 'bottom')
 varAmongFams
 
-ggsave("plots/Fig4_variation_families.png", width = 7.21, height = 4.17, units = "in")
+ggsave("plots/Fig4_variation_families_new.png", width = 7.21, height = 4.17, units = "in")
 
 
