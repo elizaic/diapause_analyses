@@ -911,6 +911,47 @@ proptable <- format_anova_table(logmodel1,
 save_tt(proptable, "plots/proptable.png")
 
 
+# create a table using tt of the results from logisticbayes_means_pop_df 
+logisticbayes_means_pop_df %>%
+  mutate(
+    # Format probability and confidence intervals
+    `Probability (95% CI)` = sprintf("%.3f (%.3f–%.3f)", 
+                                     prob, asymp.LCL, asymp.UCL),
+    # # Format SE
+    # SE = sprintf("%.3f", SE),
+    # Clean up treatment names
+    Treatment = ifelse(treatment == "long", "Long", "Short"),
+    # # Rename population for clarity
+    # Population = population,
+    # Keep core/edge and letter groupings
+    Origin = ifelse(core_edge == 'core', "Core", "Edge"),
+    Population = letter
+  ) %>%
+  select(Origin, Treatment, Population, `Probability (95% CI)`) %>%
+  arrange(Origin, Treatment, Population) %>%
+  # Create the tinytable
+  tt()
+
+emoutAllSampPops_df %>%
+  mutate(
+    # Format probability and confidence intervals
+    `Days to diapause (95% CI)` = sprintf("%.3f (%.3f–%.3f)", 
+                                     rate, asymp.LCL, asymp.UCL),
+    # # Format SE
+    # SE = sprintf("%.3f", SE),
+    # Clean up treatment names
+    Treatment = ifelse(treatment == "long", "Long", "Short"),
+    # # Rename population for clarity
+    # Population = population,
+    # Keep core/edge and letter groupings
+    Origin = ifelse(core_edge == 'core', "Core", "Edge"),
+    Population = letter
+  ) %>%
+  select(Origin, Treatment, Population, `Days to diapause (95% CI)`) %>%
+  arrange(Origin, Treatment, Population) %>%
+  # Create the tinytable
+  tt()
+
 
 ##Correlation between prop & days ---------------------------------------------
 
@@ -1079,6 +1120,7 @@ library(lmerTest)
 mod_PC1_all <- lmer(time ~ PC1 * treatment + (1|population), 
                        data = diapauseData_pc1)
 summary(mod_PC1_all)
+anova(mod_PC1_all)
 MuMIn::r.squaredGLMM(mod_PC1_all)
 emtrends(mod_PC1_all, ~ treatment, var = "PC1")
 
@@ -1112,7 +1154,7 @@ pred_data$predicted_time <- predict(mod_PC1_all,
 
 # # Calculate confidence intervals using parametric bootstrap or standard errors
 # # Using the fixed effects only
-# mm <- model.matrix(~ PC1 * treatment, data = pred_data)
+mm <- model.matrix(~ PC1 * treatment, data = pred_data)
 # pred_data$predicted_time_fe <- mm %*% fixef(mod_PC1_all)
 
 # Get variance-covariance matrix for standard errors
