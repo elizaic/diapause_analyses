@@ -343,7 +343,7 @@ ggarrange(diapausers_reaction_plot_new, diapausers_pop_plot_new,
   annotate_figure(top = text_grob("Diapausing Individuals Only",
                                   size = 15))
 
-ggsave("plots/S1_days_only_diapausers_new.jpg", 
+ggsave("plots/S2_days_only_diapausers_new.jpg", 
        dpi = 400, width = 12, height = 6)
 
 
@@ -646,7 +646,7 @@ ggarrange(surv_plot_new, surv_pop_plot_new, common.legend = FALSE,
   annotate_figure(top = text_grob("Days to Diapause - Survival Analysis",
                   size = 15))
 
-ggsave("plots/S2_days_survival_new.png", dpi = 400, width = 12, height = 6)
+ggsave("plots/S4_days_survival_new.png", dpi = 400, width = 12, height = 6)
 
 
 ## Proportion in diapause ----------------------------------------------------
@@ -810,7 +810,7 @@ prop_pop_new <- ggplot(data = logisticbayes_means_pop_df) +
 ggarrange(prop_pop_new, dtd_all_pop_new, common.legend = TRUE,
           legend = 'right', labels = "AUTO")
 
-ggsave("plots/S2_pop_figs.png", 
+ggsave("plots/S3_pop_figs.png", 
        dpi = 400, width = 10, height = 5)
 
 # Tables of results ------------------------------------------------------------
@@ -985,7 +985,7 @@ ggplot(data = prop_days_pop)+
   theme_bw(base_size = 15) +
   theme(panel.grid = element_blank())
 
-ggsave("plots/S3_corr_days_prop.png", dpi = 400, width = 7, height = 4.5)
+ggsave("plots/S1_corr_days_prop.png", dpi = 400, width = 7, height = 4.5)
 
 
 prop_days_pop_long <- prop_days_pop %>% filter(treatment == 'long')
@@ -1098,7 +1098,7 @@ ggplot(pca_plot_data, aes(x = PC1, y = PC2, color = core_edge, label = letter)) 
         # plot.title = element_text(hjust = 0.5, face = "bold"),
         ) 
 
-ggsave("plots/PCA_biplot.png", dpi = 400, width = 6, height = 5)
+ggsave("plots/S5_PCA_biplot.png", dpi = 400, width = 6, height = 5)
 
 
 
@@ -1200,5 +1200,5 @@ ggplot(data = diapauseData_pc1,
   theme(panel.grid = element_blank(),
         strip.background = element_blank())
 
-ggsave("plots/env_correlations_new.png", dpi = 400, width = 10, height = 5)
+ggsave("plots/Fig3_env_correlations_new.png", dpi = 400, width = 10, height = 5)
 
