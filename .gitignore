@@ -6,3 +6,6 @@
 README.html
 analysis_output_files
 old_plots_and_copies_of_data
+logistic_brms_fit.rds
+table_pop_predictions.xlsx
+~$table_pop_predictions.xlsx
