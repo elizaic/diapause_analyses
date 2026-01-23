@@ -119,6 +119,7 @@ diapauseData3 <- left_join(diapauseData2,
          time_surv = ifelse(diapause == 0 & time_raw >= 41, 43, time_raw),
          time_qc = ifelse(diapause == 0 & time_surv != 43, NA, time_surv), 
          diapause_qc = ifelse(diapause == 0 & time_surv != 43, NA, diapause),
+         survival = ifelse(is.na(time_qc), 0, 1), # if the beetle survived the entire experiment
          .after = time_raw)
 diapauseData3$population <- factor(diapauseData3$population, levels = c('Lo', 'Hu', 'De', 'Pu', 'Lc', 'Wi', 'Lj', 'Bl'))
 diapauseData3$core_edge <- factor(diapauseData3$core_edge, levels = c('core', 'edge'))
@@ -136,6 +137,13 @@ range(ageAtStart$start_date - ageAtStart$eclosion, na.rm = T)
 diapauseData3 %>% filter(population == 'Lj') %>% 
   ggplot(aes(x = weight)) +
   geom_histogram(bins = 50)
+
+
+# Survival to end of experiment -----------------------------------------------
+diapauseData3 %>%
+  filter(survival == 1) %>%
+  nrow()
+
 
 
 ## Climate and site characteristics --------------------------------------------
@@ -762,19 +770,60 @@ logistic_ce_brm <- brm(diapause_qc ~ core_edge * treatment + (1|population),
           warmup = 1000,
           cores = 4, 
           seed = 123,
+          prior = prior(normal(0,10), class = "b"),
+          sample_prior = 'yes',
           control = list(max_treedepth = 15,
                          adapt_delta = 0.9),
-          file = "logistic_brms_fit.rds")
+          file = "logistic_brms_fit.rds"
+          )
 # saveRDS(logistic_ce_brm, file = "logistic_brms_fit.rds")
+logistic_ce_brm_prior_only <- brm(diapause_qc ~ core_edge * treatment + (1|population), 
+                       family = bernoulli(), 
+                       data = diapauseData3 %>% filter(!is.na(diapause_qc)),
+                       chains = 4,
+                       iter = 200,
+                       warmup = 50,
+                       cores = 4, 
+                       seed = 123,
+                       prior = prior(normal(0,10), class = "b"),
+                       sample_prior = 'only',
+                       control = list(max_treedepth = 15,
+                                      adapt_delta = 0.9),
+                       file = "logistic_brms_fit_prior.rds"
+)
+# saveRDS(logistic_ce_brm_prior_only, file = "logistic_brms_fit_prior.rds")
+
+
+# plot posteriors on priors 
+bind_rows(logistic_ce_brm %>%
+  gather_draws(`b_.*`, regex = TRUE) %>%
+  mutate(distribution = "posterior"),
+logistic_ce_brm_prior_only %>%
+  gather_draws(`b_.*`, regex = TRUE) %>%
+  mutate(distribution = "Prior")
+) %>%
+  ggplot(aes(x = .value, y = .variable, fill = distribution)) +
+  stat_halfeye(
+    alpha = 0.2,
+    side = "top"
+  )
+
+
+
 summary(logistic_ce_brm)
 pairs(logistic_ce_brm)
 # Test main effects and interaction
 hypothesis(logistic_ce_brm, c("Intercept = 0",
                               "core_edgeedge = 0",
                               "treatmentshort = 0",
-                              "core_edgeedge:treatmentshort = 0"))
+                              "core_edgeedge:treatmentshort = 0"),
+           alpha = 0.1)
+
+emmeans(logistic_ce_brm, 
+        pairwise ~ core_edge | treatment, 
+        type = "response")
 logistic_means_ce_brm <- emmeans(logistic_ce_brm, 
-                             pairwise ~ treatment * core_edge, 
+                             pairwise ~ core_edge * treatment, 
                              type = "response")
 logistic_means_ce_brm_df <- as.data.frame(logistic_means_ce_brm$emmeans) %>%
   unite("treatment_core_edge", c(treatment, core_edge), remove = FALSE)
@@ -836,9 +885,9 @@ prop_plotnew <- ggplot(data = logistic_means_ce_brm_df, aes(x = treatment, y = r
                       group = population, color = core_edge),
                   position = position_dodge(width = 0.4),
                   alpha = 0.3, shape = 15) +
-  # annotate('text', label = plot_pval_labs(logmodel1),
-  #          x = 0.5, y = 1.05, hjust = 0, vjust = 1,
-  #          size = 3) +
+  annotate('text', label = "Core/Edge: n.s.\nTreatment: *\nCore/Edge*Treatment: + ",
+           x = 0.5, y = 1.05, hjust = 0, vjust = 1,
+           size = 3) +
   #core/edge lines and points
   geom_line(aes(color = core_edge, group = core_edge), 
             position = position_dodge(width = 0.3)) +
@@ -1001,9 +1050,42 @@ alltable <- format_anova_table(modAllSamp,
                    term_names = c("Intercept", "Origin", "Treatment", "Origin * Treatment"))
 save_tt(alltable, "plots/alltable.png")
 
-###doesn't work on brms model - need to update???
-proptable <- format_anova_table(logistic_ce_brm,
-                   term_names = c("Intercept", "Origin", "Treatment", "Origin * Treatment"))
+# ###doesn't work on brms model, updated to be a table of effect sizes from Bayesian model
+# proptable <- format_anova_table(logistic_ce_brm,
+#                    term_names = c("Intercept", "Origin", "Treatment", "Origin * Treatment"))
+
+proptable <- summary(logistic_ce_brm)$fixed %>% 
+  as.data.frame() %>%
+  rownames_to_column(var = "Term") %>%
+  mutate(Term = case_when(
+    Term == 'core_edgeedge' ~ "Origin",
+    Term == 'treatmentshort' ~ 'Treatment',
+    Term == 'core_edgeedge:treatmentshort' ~ 'Origin * Treatment',
+    .default = Term),
+    star = ifelse(`l-95% CI` * `u-95% CI` > 0, "*", ""),
+    `95% CI` = paste0("(", round(`l-95% CI`,2), ", ", round(`u-95% CI`,2), ") ", star),
+    Estimate = round(Estimate, 3),
+    Est.Error = round(Est.Error, 3),
+  ) %>%
+  rename(
+    `Est. Error` = `Est.Error`) %>%
+  select(-c('Rhat', 'Bulk_ESS', 'Tail_ESS', 'l-95% CI', 'u-95% CI', 'star')) %>%
+  tt(
+    caption = "Table of Fixed Effect Sizes from Bayesian Logistic Regression",
+    notes = "* 95% CI does not overlap 0" ) %>%
+  # Style the table
+  style_tt(
+    i = 0,  # Header row
+    bold = TRUE,
+    line = "b",
+    line_width = 0.2
+  ) %>%
+  style_tt(
+    i = 4,  # Last row
+    line = "b",
+    line_width = 0.2
+  )
+proptable
 save_tt(proptable, "plots/proptable.png")
 
 
