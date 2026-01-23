@@ -42,7 +42,7 @@ and not all beetles in this dataset were present in the diapause study.
   
 ## Code
 
-The code used to analyze the data and create the figures is in the `scrips` directory.
+The code used to analyze the data and create the figures is in the `scripts` directory.
 
 - `diapause_analysis.R` contains the code used to analyze the diapause local adaptation data.
 - `h2_analysis.R` contains the code used to analyze the breeding study and calculate heritability.
